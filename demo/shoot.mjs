@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer-core";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-const TYPES = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".svg": "image/svg+xml" };
+const TYPES = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".svg": "image/svg+xml", ".woff2": "font/woff2" };
 
 const CHROME = process.env.CHROME || [
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -57,6 +57,14 @@ const run = async () => {
       page.on("pageerror", (e) => console.error(`[${s.file}]`, e.message));
       await page.goto(`${base}?${s.query}`, { waitUntil: "networkidle0" });
       await page.waitForFunction(() => window.__cards?.length > 0);
+      // Roboto, like Home Assistant: never shoot with a fallback font.
+      const roboto = await page.evaluate(async () => {
+        const faces = [...document.fonts].filter((f) => f.family.replace(/"/g, "") === "Roboto");
+        await Promise.all(faces.map((f) => f.load().catch(() => null)));
+        await document.fonts.ready;
+        return faces.length === 3 && faces.every((f) => f.status === "loaded");
+      });
+      if (!roboto) throw new Error(`[${s.file}] Roboto did not load: the screenshot would use another font`);
       // Let the transitions finish and the backgrounds decode.
       await new Promise((r) => setTimeout(r, 1200));
       const out = join(ROOT, "docs", s.file);

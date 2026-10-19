@@ -18,6 +18,7 @@
     "demo": "node -e \"import('./demo/shoot.mjs').then(async m=>{await m.serve(8767);console.log('http://127.0.0.1:8767/demo/')})\""
   },
   "devDependencies": {
+    "@fontsource/roboto": "^5.3.0",
     "@mdi/js": "^7.4.47",
     "happy-dom": "^15.11.7",
     "puppeteer-core": "^23.11.1"

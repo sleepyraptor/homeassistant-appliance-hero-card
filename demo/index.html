@@ -27,8 +27,12 @@
       --secondary-text-color: #9b9b9b;
       --divider-color: rgba(225, 225, 225, 0.12);
     }
+    /* Home Assistant's font, from @fontsource/roboto: the screenshots must look like the real thing. */
+    @font-face { font-family: Roboto; font-weight: 400; font-display: block; src: url(/node_modules/@fontsource/roboto/files/roboto-latin-400-normal.woff2) format("woff2"); }
+    @font-face { font-family: Roboto; font-weight: 500; font-display: block; src: url(/node_modules/@fontsource/roboto/files/roboto-latin-500-normal.woff2) format("woff2"); }
+    @font-face { font-family: Roboto; font-weight: 700; font-display: block; src: url(/node_modules/@fontsource/roboto/files/roboto-latin-700-normal.woff2) format("woff2"); }
     html, body { margin: 0; background: var(--primary-background-color); }
-    body { font-family: Roboto, "Segoe UI", system-ui, -apple-system, sans-serif; -webkit-font-smoothing: antialiased; }
+    body { font-family: Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
     #stage { padding: 16px; box-sizing: border-box; margin: 0 auto; display: grid; gap: 12px; grid-template-columns: repeat(var(--cols, 2), 1fr); }
   </style>
 </head>
