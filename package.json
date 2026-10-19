@@ -1,0 +1,25 @@
+{
+  "name": "appliance-hero-card",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Home Assistant card: a washer, dryer or dishwasher at a glance — phase, progress ring, finish time, controls, options and alerts",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sleepyraptor/homeassistant-appliance-hero-card"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "screenshots": "node demo/shoot.mjs",
+    "demo": "node -e \"import('./demo/shoot.mjs').then(async m=>{await m.serve(8767);console.log('http://127.0.0.1:8767/demo/')})\""
+  },
+  "devDependencies": {
+    "@mdi/js": "^7.4.47",
+    "happy-dom": "^15.11.7",
+    "puppeteer-core": "^23.11.1"
+  }
+}
