@@ -4,12 +4,12 @@
  * with the full programme one tap away.
  * https://github.com/sleepyraptor/homeassistant-appliance-hero-card
  */
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 const I18N = {
   en: {
     idle: "Idle", running: "Running", paused: "Paused", finished: "Finished", off: "Off",
-    ends_at: "Ends at {time}", ends: "Ends", left: "Remaining", advanced: "Advanced",
+    ends_at: "Ends at {time}", ends: "Ends", left: "Remaining", used: "Used", advanced: "Advanced",
     start: "Start", pause: "Pause", resume: "Resume", stop: "Stop",
     min: "{n} min", h: "{h} h {m} min",
     p_weightsensing: "Weighing the load", p_prewash: "Pre-wash", p_wash: "Washing", p_washing: "Washing", p_rinse: "Rinsing",
@@ -35,11 +35,13 @@ const I18N = {
     options: "Options", h_options: "Chips under the controls: a select shows its value, a switch shows up only while on.",
     alerts: "Alerts", h_alerts: "Amber chips shown only while the entity is on: detergent low, filter to clean…",
     advanced_list: "Advanced", h_advanced: "Behind the chevron: every entity becomes a tile with the control that fits it.",
+    consumption: "Consumption", h_consumption: "Total counters — energy, water, gas: the card shows how much this cycle has used, from Home Assistant's history.",
+    f_decimals: "Decimals",
     item_n: "#{n}", add: "Add", up: "Move up", down: "Move down", remove: "Remove", card_yaml: "Card {type} — edit it in YAML"
   },
   it: {
     idle: "Ferma", running: "In funzione", paused: "In pausa", finished: "Finito", off: "Spenta",
-    ends_at: "Finisce alle {time}", ends: "Fine", left: "Mancano", advanced: "Avanzate",
+    ends_at: "Finisce alle {time}", ends: "Fine", left: "Mancano", used: "Consumo", advanced: "Avanzate",
     start: "Avvia", pause: "Pausa", resume: "Riprendi", stop: "Stop",
     min: "{n} min", h: "{h} h {m} min",
     p_weightsensing: "Pesatura del carico", p_prewash: "Prelavaggio", p_wash: "Lavaggio", p_washing: "Lavaggio", p_rinse: "Risciacquo",
@@ -64,6 +66,8 @@ const I18N = {
     options: "Opzioni", h_options: "Chip sotto i comandi: una select mostra il suo valore, un interruttore compare solo se acceso.",
     alerts: "Avvisi", h_alerts: "Chip ambra che compaiono solo quando l'entità è accesa: detersivo in esaurimento, filtro da pulire…",
     advanced_list: "Avanzate", h_advanced: "Dietro la freccia: ogni entità diventa una tile con il controllo adatto.",
+    consumption: "Consumi", h_consumption: "Contatori totali — energia, acqua, gas: la card mostra quanto ha consumato questo ciclo, dallo storico di Home Assistant.",
+    f_decimals: "Decimali",
     item_n: "#{n}", add: "Aggiungi", up: "Sposta su", down: "Sposta giù", remove: "Rimuovi", card_yaml: "Card {type} — si modifica in YAML"
   }
 };
@@ -167,7 +171,8 @@ export const timing = (hass, config, now = Date.now()) => {
  * `_wide` asks for the full width of the grid and is removed before the card is created.
  */
 export const advancedCard = (item) => {
-  if (item && typeof item === "object" && item.type) return { ...item };
+  // A whole card (a graph, a stack…) gets the full width.
+  if (item && typeof item === "object" && item.type) return { ...item, _wide: true };
   const o = typeof item === "string" ? { entity: item } : { ...item };
   const domain = String(o.entity || "").split(".")[0];
   const tile = { type: "tile", entity: o.entity, ...(o.name ? { name: o.name } : {}), ...(o.icon ? { icon: o.icon } : {}) };
@@ -184,6 +189,38 @@ export const pressAction = (id) => {
   if (d === "button" || d === "input_button") return [d, "press"];
   if (d === "script" || d === "scene") return [d, "turn_on"];
   return ["homeassistant", "turn_on"];
+};
+
+/**
+ * The current cycle, or the one that just finished, from the machine's history: when it started, and what each
+ * counter read at that moment. `history` is Home Assistant's compressed history ({ entity_id: [{ s, lu }] }, lu in
+ * seconds). Returns null when the history has no cycle.
+ */
+export const cycleBase = (history, config, counters) => {
+  const at = (e) => (e.lu !== undefined ? e.lu * 1000 : Date.parse(e.last_updated || e.last_changed));
+  const busy = (st) => ["running", "paused"].includes(modeOf(config, st));
+  const rows = ((history && history[config.entity]) || []).map((e) => ({ t: at(e), s: e.s ?? e.state })).filter((r) => Number.isFinite(r.t)).sort((a, b) => a.t - b.t);
+  let end = rows.length - 1;
+  while (end >= 0 && !busy(rows[end].s)) end--;
+  if (end < 0) return null;
+  let start = end;
+  while (start > 0 && busy(rows[start - 1].s)) start--;
+  const t0 = rows[start].t;
+  const base = {};
+  for (const id of counters) {
+    const vals = ((history && history[id]) || []).map((e) => ({ t: at(e), v: num(e.s ?? e.state) })).filter((r) => r.v !== null && Number.isFinite(r.t)).sort((a, b) => a.t - b.t);
+    if (!vals.length) continue;
+    const before = vals.filter((r) => r.t <= t0).pop();
+    base[id] = (before || vals[0]).v;
+  }
+  return { start: t0, base };
+};
+
+/** How much a counter has gone up since the cycle started; a counter that was reset counts from zero. */
+export const used = (now, base) => {
+  const v = num(now);
+  if (v === null || base === undefined || base === null) return null;
+  return v >= base ? v - base : v;
 };
 
 const ON = ["on", "open", "detected", "problem", "true"];
@@ -225,6 +262,10 @@ ha-card.idle,ha-card.off{background:rgba(var(--rgb),.06);box-shadow:inset 0 0 0 
 .times{display:grid;grid-template-columns:auto minmax(0,1fr);gap:1px 10px;margin-top:6px;font-size:13px;color:var(--secondary-text-color)}
 .times b{color:var(--primary-text-color);font-weight:700}
 .times>*{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* The counters wrap between each other, never inside a value: on a phone the water goes under the energy. */
+.times .use{display:flex;flex-wrap:wrap;gap:0 10px;white-space:normal}
+.times .use>span{white-space:nowrap}
+.times .use ha-icon{--mdc-icon-size:14px;margin:0 2px 0 0;vertical-align:-2px;color:var(--st)}
 .ring{flex:0 0 auto;position:relative;width:78px;height:78px}
 .ring svg{display:block;width:100%;height:100%;transform:rotate(-90deg)}
 .ring .pct{position:absolute;inset:0;display:grid;place-items:center;font-size:17px;font-weight:700;color:var(--primary-text-color)}
@@ -309,6 +350,9 @@ class ApplianceHeroCard extends HTMLElement {
     this._adv = [];
     this._sig = null;
     this._ringMode = null;
+    this._cycle = null;
+    this._cycleFor = null;
+    this._asked = false;
     this._render();
   }
 
@@ -408,12 +452,71 @@ class ApplianceHeroCard extends HTMLElement {
   _signature() {
     const c = this._c;
     const ids = [c.entity, c.phase_entity, c.progress_entity, c.remaining_entity, c.finish_entity,
-      ...(c.options || []).map((o) => itemOf(o).entity), ...(c.alerts || []).map((o) => itemOf(o).entity)].filter(Boolean);
+      ...(c.options || []).map((o) => itemOf(o).entity), ...(c.alerts || []).map((o) => itemOf(o).entity),
+      ...(c.consumption || []).map((o) => itemOf(o).entity)].filter(Boolean);
     // The minute matters too: the time left is counted down from the finish time.
-    return JSON.stringify([langOf(this._h), Math.floor(Date.now() / 60000), ids.map((id) => {
+    return JSON.stringify([langOf(this._h), Math.floor(Date.now() / 60000), this._cycle ? this._cycle.start : 0, ids.map((id) => {
       const st = this._st(id);
       return st && [st.state, st.attributes.friendly_name];
     })]);
+  }
+
+  /**
+   * Keeps the cycle's starting counters: read from the history when a cycle starts (or on the first load during one)
+   * and kept while it runs, pauses and finishes; dropped when the machine is at rest. One request per cycle, even
+   * when it fails or finds nothing: the card never polls the history.
+   */
+  _watchCycle(mode) {
+    const c = this._c;
+    if (!(c.consumption || []).length) return;
+    const group = mode === "running" || mode === "paused" ? "busy" : mode === "finished" ? "done" : "rest";
+    const prev = this._cycleFor;
+    this._cycleFor = group;
+    if (group === "rest" || (prev === "done" && group === "busy")) {
+      this._cycle = null;
+      this._asked = false;
+    }
+    if (group === "rest" || this._asked || !this._h.callWS) return;
+    this._asked = true;
+    const counters = c.consumption.map((o) => itemOf(o).entity).filter(Boolean);
+    const now = new Date();
+    this._h.callWS({
+      type: "history/history_during_period",
+      // A day back is enough for any cycle; one that started earlier counts from there.
+      start_time: new Date(now - 24 * 3600000).toISOString(),
+      end_time: now.toISOString(),
+      entity_ids: [c.entity, ...counters],
+      minimal_response: true,
+      no_attributes: true,
+      significant_changes_only: false
+    }).then((h) => {
+      this._cycle = cycleBase(h, c, counters);
+    }).catch(() => {
+      this._cycle = null;
+    }).finally(() => {
+      this._sig = null;
+      this._render();
+    });
+  }
+
+  /** "⚡ 0.6 kWh  💧 38 L" for the cycle, or "" while the history is not there. */
+  _usage(locale) {
+    if (!this._cycle) return "";
+    const ICONS = { energy: "mdi:lightning-bolt", water: "mdi:water", gas: "mdi:fire", volume: "mdi:water" };
+    const parts = (this._c.consumption || []).map((o) => {
+      const it = itemOf(o);
+      const st = this._st(it.entity);
+      const v = st && used(st.state, this._cycle.base[it.entity]);
+      if (v === null || v === undefined) return "";
+      // No more decimals than the counter itself has: a meter that counts in tenths shows tenths.
+      const own = (String(st.state).split(".")[1] || "").length;
+      const d = it.decimals !== undefined ? Number(it.decimals) : v >= 10 ? 0 : Math.min(own, 2);
+      const n = v.toLocaleString(locale, { minimumFractionDigits: d, maximumFractionDigits: d });
+      const unit = st.attributes.unit_of_measurement || "";
+      const icon = it.icon || ICONS[st.attributes.device_class] || st.attributes.icon || "mdi:counter";
+      return `<span><ha-icon icon="${esc(icon)}"></ha-icon>${esc(it.name ? `${it.name} ` : "")}${esc(n)}${unit ? `\u00a0${esc(unit)}` : ""}</span>`;
+    }).filter(Boolean);
+    return parts.join("");
   }
 
   _dur(L, m) {
@@ -434,6 +537,7 @@ class ApplianceHeroCard extends HTMLElement {
     const phaseSt = this._st(c.phase_entity);
     const mode = modeOf(c, machine && machine.state, phaseSt && phaseSt.state);
     const active = mode === "running" || mode === "paused";
+    this._watchCycle(mode);
     const phase = active ? phaseLabel(this._h, L, c, phaseSt) : "";
     const pct = Math.max(0, Math.min(100, num((this._st(c.progress_entity) || {}).state, 0)));
     const { mins, finish } = timing(this._h, c);
@@ -459,9 +563,11 @@ class ApplianceHeroCard extends HTMLElement {
     }
 
     const state = `<div class="state"><i class="dot"></i><span class="st">${esc(t(L, mode))}</span>${phase && where === "inline" ? `<span class="ph">${esc(phase)}</span>` : ""}</div>`;
-    const times = active && (finish || mins !== null)
-      ? `<div class="times">${time ? `<b>${esc(t(L, "ends"))}</b><span>${esc(time)}</span>` : ""}${mins !== null ? `<b>${esc(t(L, "left"))}</b><span>${esc(this._dur(L, mins))}</span>` : ""}</div>`
-      : "";
+    const use = active || mode === "finished" ? this._usage(locale) : "";
+    const rows = (active && time ? `<b>${esc(t(L, "ends"))}</b><span>${esc(time)}</span>` : "")
+      + (active && mins !== null ? `<b>${esc(t(L, "left"))}</b><span>${esc(this._dur(L, mins))}</span>` : "")
+      + (use ? `<b>${esc(t(L, "used"))}</b><span class="use">${use}</span>` : "");
+    const times = rows ? `<div class="times">${rows}</div>` : "";
     const shown = mode === "finished" ? 100 : pct;
     const ring = active || mode === "finished" ? `<div class="ring"><svg viewBox="0 0 78 78" aria-hidden="true">
       <circle cx="39" cy="39" r="${R}" fill="none" stroke="var(--divider-color)" stroke-width="7"/>
@@ -578,7 +684,8 @@ const EDITOR_CSS = `
 const LISTS = [
   ["options", "h_options"],
   ["alerts", "h_alerts"],
-  ["advanced", "h_advanced"]
+  ["advanced", "h_advanced"],
+  ["consumption", "h_consumption"]
 ];
 const STATE_KEYS = ["running_states", "paused_states", "finished_states"];
 
@@ -664,10 +771,11 @@ class ApplianceHeroCardEditor extends HTMLElement {
   }
 
   _itemSchema(key) {
-    const domain = key === "alerts" ? ["binary_sensor", "switch", "input_boolean"] : undefined;
+    const domain = { alerts: ["binary_sensor", "switch", "input_boolean"], consumption: ["sensor"] }[key];
     return [
       { name: "entity", required: true, selector: { entity: domain ? { domain } : {} } },
-      { type: "grid", name: "", schema: [{ name: "name", selector: { text: {} } }, { name: "icon", selector: { icon: {} } }] }
+      { type: "grid", name: "", schema: [{ name: "name", selector: { text: {} } }, { name: "icon", selector: { icon: {} } }] },
+      ...(key === "consumption" ? [{ name: "decimals", selector: { number: { min: 0, max: 3, mode: "box" } } }] : [])
     ];
   }
 

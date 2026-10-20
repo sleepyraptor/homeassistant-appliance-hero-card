@@ -68,3 +68,12 @@ test("labels in Italian", async () => {
   assert.equal(main(ed).computeLabel({ name: "entity" }), "Stato della macchina");
   assert.match(ed.querySelector(".list.advanced .head").textContent, /Avanzate/);
 });
+
+test("consumption counters in the editor, with decimals", async () => {
+  const ed = await makeEditor({ entity: "sensor.w" });
+  ed.querySelector(".list.consumption .add").click();
+  const form = rows(ed, "consumption")[0].querySelector("ha-form");
+  assert.match(JSON.stringify(form.schema), /"name":"decimals"/);
+  change(form, { entity: "sensor.energy", decimals: 1 });
+  assert.deepEqual(ed.last.consumption, [{ entity: "sensor.energy", decimals: 1 }]);
+});

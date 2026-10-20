@@ -9,7 +9,7 @@ A Home Assistant card for a **washer, dryer or dishwasher**, built so you can re
 - a picture of the machine;
 - the phase it is in;
 - a progress ring;
-- when the cycle ends;
+- when the cycle ends, and how much energy and water it has used;
 - the buttons that make sense right now;
 - the options that are set and what needs your attention.
 
@@ -52,6 +52,11 @@ or none at all if you use the visual editor.
   - an `H:MM` string;
   - a timestamp;
   - or both together.
+- **What the cycle has used:** energy, water, gas — from the total counters your machine or smart plug already has.
+  - The card reads from Home Assistant's history what each counter said when the cycle started, and shows the
+    difference: *Used ⚡ 0.6 kWh 💧 42 L*.
+  - The row grows while the machine runs and stays under the tick when it has finished.
+  - One history request per cycle, never polling. Without the recorder the row simply does not appear.
 - **Buttons that fit the moment:**
   - Running: *Pause* and *Stop*.
   - Paused: *Resume* and *Stop*.
@@ -66,7 +71,7 @@ or none at all if you use the visual editor.
   - a slider for a number;
   - a toggle for a switch.
 
-  You can also put any card of your own there.
+  You can also put any card of your own there — an energy graph, for example. Cards take the full width.
 - **Works with most integrations:**
   - Samsung SmartThings, Home Connect, Miele and LG ThinQ states are recognised out of the box.
   - So is a plain binary sensor.
@@ -160,6 +165,28 @@ The phase name is chosen in this order:
 3. the integration's translation;
 4. the raw state, tidied up.
 
+### Consumption (`consumption`)
+
+A list of **total counters**; an item is an entity id, or `{ entity, name, icon, decimals }`.
+
+| Key | Description |
+|---|---|
+| `entity` | **Required.** A sensor that only goes up: energy (`kWh`), water (`L`), gas… |
+| `name` | Shown before the value. Usually not needed: the icon says what it is. |
+| `icon` | Default: a bolt for energy, a drop for water, a flame for gas, from the sensor's device class. |
+| `decimals` | Default: as many as the counter has (at most 2), none from 10 up. |
+
+How it works:
+- **The start of the cycle** is the moment the machine last went from rest to running or paused. The card asks
+  Home Assistant's history (`history/history_during_period`, the last 24 hours) once per cycle — when the cycle
+  starts, or when the dashboard opens during one — for the machine's state and the counters.
+- **What it shows** is each counter's current value minus its value at that moment. The row stays while the
+  machine runs, pauses and finishes, and goes away when it is at rest.
+- **If a counter goes down** during the cycle (a reset), the new value is shown.
+- **Accuracy** depends on the counter: many machines update their energy in steps of 0.1 kWh, so early in a cycle
+  the value is approximate.
+- **Without the history**, or for a counter that is not recorded, the row simply does not appear.
+
 ### Buttons (`controls`)
 
 | Key | Shown when | Description |
@@ -179,7 +206,7 @@ Each of these is a list. An item is an entity id, or `{ entity, name, icon }`.
 |---|---|
 | `options` | Chips under the buttons. A select or sensor shows its value; a `switch`, `input_boolean` or `binary_sensor` appears only while it is on. |
 | `alerts` | Amber chips, shown only while the entity is on (`on`, `problem`, `detected`…). |
-| `advanced` | Behind the chevron, as native tiles. A `select` gets its options, a `number` a slider, a `switch` a toggle, a `button` a press. An item with a `type` is used as a card config as is. |
+| `advanced` | Behind the chevron, as native tiles. A `select` gets its options, a `number` a slider, a `switch` a toggle, a `button` a press. An item with a `type` is used as a card config as is, across the full width. |
 | `advanced_open` | `true` opens the advanced section by default. |
 
 Tapping a chip opens its entity's details.
@@ -224,6 +251,9 @@ phase_entity: sensor.washer_progress
 progress_entity: sensor.washer_progress_percent
 remaining_entity: sensor.washer_completion_time
 finish_entity: sensor.washer_estimated_finish
+consumption:
+  - sensor.washer_energy
+  - sensor.washer_water_consumption
 controls:
   start: button.washer_start
   pause: button.washer_pause
@@ -248,7 +278,10 @@ advanced:
     name: Delayed start
   - switch.washer_pre_wash
   - switch.washer_extra_rinse
-  - sensor.washer_water_consumption
+  - type: tile
+    entity: sensor.washer_energy
+    features:
+      - type: trend-graph
 ```
 
 ### A dryer on a smart plug, with a template binary sensor for "running"
@@ -259,6 +292,8 @@ entity: binary_sensor.dryer_running
 name: Dryer
 icon: mdi:tumble-dryer
 color: orange
+consumption:
+  - sensor.dryer_plug_energy
 ```
 
 ### Home Connect dishwasher, compact, with your own phase names
@@ -286,6 +321,7 @@ phases:
 | A grid of start / pause / stop tiles | `controls` — only the buttons that make sense are shown |
 | Tiles for the cycle, temperature, spin and delayed start | `advanced` |
 | Tiles for option switches and detergent warnings | `options` and `alerts` |
+| An energy tile with a trend graph | `consumption` for this cycle, and the tile itself in `advanced` |
 
 ## Development
 

@@ -46,9 +46,28 @@ const states = {
   "switch.w_prewash": s("on", { friendly_name: it ? "Prelavaggio" : "Pre-wash" }),
   "switch.d_wrinkle": s("on", { friendly_name: it ? "Antipiega" : "Wrinkle prevent" }),
   "binary_sensor.w_detergent": s("on", { friendly_name: it ? "Detersivo in esaurimento" : "Detergent low" }),
-  "binary_sensor.d_filter": s("on", { friendly_name: it ? "Pulisci il filtro" : "Clean the filter" })
+  "binary_sensor.d_filter": s("on", { friendly_name: it ? "Pulisci il filtro" : "Clean the filter" }),
+  // Total counters: the card shows how much the current cycle has used.
+  "sensor.w1_energy": s("128.9", { unit_of_measurement: "kWh", device_class: "energy" }),
+  "sensor.w1_water": s("9581", { unit_of_measurement: "L", device_class: "water" }),
+  "sensor.d1_energy": s("342.4", { unit_of_measurement: "kWh", device_class: "energy" }),
+  "sensor.w2_energy": s("131.2", { unit_of_measurement: "kWh", device_class: "energy" }),
+  "sensor.w2_water": s("9640", { unit_of_measurement: "L", device_class: "water" })
 };
-const hass = { states, language: lang, locale: { language: lang }, callService: () => {}, formatEntityState: (st) => st.state };
+/** Home Assistant's history, as the card asks for it: each cycle started an hour and a half ago. */
+const ago = (min) => Date.now() / 1000 - min * 60;
+const HISTORY = {
+  "sensor.w1_state": [{ s: "idle", lu: ago(600) }, { s: "run", lu: ago(90) }],
+  "sensor.w1_energy": [{ s: "128.3", lu: ago(600) }], "sensor.w1_water": [{ s: "9539", lu: ago(600) }],
+  "sensor.d1_state": [{ s: "idle", lu: ago(600) }, { s: "run", lu: ago(90) }, { s: "pause", lu: ago(5) }],
+  "sensor.d1_energy": [{ s: "340.9", lu: ago(600) }],
+  "sensor.w2_state": [{ s: "idle", lu: ago(600) }, { s: "run", lu: ago(150) }, { s: "idle", lu: ago(2) }],
+  "sensor.w2_energy": [{ s: "130.3", lu: ago(600) }], "sensor.w2_water": [{ s: "9578", lu: ago(600) }]
+};
+const hass = {
+  states, language: lang, locale: { language: lang }, callService: () => {}, formatEntityState: (st) => st.state,
+  callWS: async (msg) => Object.fromEntries(msg.entity_ids.map((id) => [id, HISTORY[id] || []]))
+};
 
 const machine = (id, name, image, color, extra = {}) => ({
   entity: `sensor.${id}_state`, name, image: dataUri(image), color,
@@ -62,9 +81,9 @@ const washerOpts = { options: [{ entity: "select.w_temp", icon: "mdi:thermometer
 const dryerOpts = { icon: "mdi:tumble-dryer", options: [{ entity: "select.d_level", icon: "mdi:water-off-outline" }, { entity: "switch.d_wrinkle", icon: "mdi:tshirt-crew-outline" }] };
 
 const MACHINES = [
-  machine("w1", it ? "Lavatrice" : "Washer", washer(), "blue", washerOpts),
-  machine("d1", it ? "Asciugatrice" : "Dryer", dryer(), "orange", dryerOpts),
-  machine("w2", it ? "Lavatrice" : "Washer", washer(), "blue", { options: washerOpts.options }),
+  machine("w1", it ? "Lavatrice" : "Washer", washer(), "blue", { ...washerOpts, consumption: ["sensor.w1_energy", "sensor.w1_water"] }),
+  machine("d1", it ? "Asciugatrice" : "Dryer", dryer(), "orange", { ...dryerOpts, consumption: ["sensor.d1_energy"] }),
+  machine("w2", it ? "Lavatrice" : "Washer", washer(), "blue", { options: washerOpts.options, consumption: ["sensor.w2_energy", "sensor.w2_water"] }),
   machine("d2", it ? "Asciugatrice" : "Dryer", dryer(), "orange", { ...dryerOpts, alerts: [{ entity: "binary_sensor.d_filter", icon: "mdi:air-filter" }] })
 ];
 const STYLES = ["tab", "inline", "chip"].map((p) => ({ ...MACHINES[0], name: p, phase_style: p, options: [], alerts: [], advanced: [] }));

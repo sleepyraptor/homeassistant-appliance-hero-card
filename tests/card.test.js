@@ -86,7 +86,8 @@ test("advanced entities become tiles with the control that fits them", async () 
   assert.equal(advancedCard("switch.prewash").features[0].type, "toggle");
   assert.equal(advancedCard("switch.prewash")._wide, undefined);
   assert.equal(advancedCard("sensor.water").features, undefined);
-  assert.deepEqual(advancedCard({ type: "entities", entities: ["sensor.x"] }), { type: "entities", entities: ["sensor.x"] });
+  assert.deepEqual(advancedCard({ type: "entities", entities: ["sensor.x"] }), { type: "entities", entities: ["sensor.x"], _wide: true },
+    "a whole card is used as is, across the full width");
 });
 
 test("running: tab with the phase, ring, time left, pause and stop, a light on the arc", async () => {
@@ -241,4 +242,98 @@ test("a config without entity is refused; a stub config is offered", async () =>
   assert.throws(() => new Card().setConfig({}), /entity/);
   const stub = Card.getStubConfig({ states: { "sensor.living_temp": st("20"), "sensor.dryer_machine_state": st("idle") } });
   assert.deepEqual(stub, { entity: "sensor.dryer_machine_state", name: "Dryer", icon: "mdi:tumble-dryer" });
+});
+
+/* ------------------------------------------------------------- consumption */
+
+const T0 = Date.parse("2026-10-19T08:00:00Z") / 1000;
+const HISTORY = {
+  [W]: [{ s: "idle", lu: T0 }, { s: "active", lu: T0 + 3600 }, { s: "pause", lu: T0 + 4000 }, { s: "active", lu: T0 + 4300 }],
+  "sensor.washer_energy": [{ s: "12.1", lu: T0 }, { s: "12.3", lu: T0 + 3000 }, { s: "12.6", lu: T0 + 5000 }],
+  "sensor.washer_water": [{ s: "unavailable", lu: T0 }, { s: "900", lu: T0 + 3700 }]
+};
+
+test("the cycle starts where the machine last left rest, pauses included; counters read at that moment", async () => {
+  const { cycleBase } = await boot();
+  const c = cycleBase(HISTORY, { entity: W }, ["sensor.washer_energy", "sensor.washer_water"]);
+  assert.equal(c.start, (T0 + 3600) * 1000);
+  assert.equal(c.base["sensor.washer_energy"], 12.3, "the last reading before the start");
+  assert.equal(c.base["sensor.washer_water"], 900, "no reading before: the first one after");
+  const done = cycleBase({ [W]: [...HISTORY[W], { s: "idle", lu: T0 + 9000 }] }, { entity: W }, []);
+  assert.equal(done.start, (T0 + 3600) * 1000, "a finished cycle is still found");
+  assert.equal(cycleBase({ [W]: [{ s: "idle", lu: T0 }] }, { entity: W }, []), null);
+  assert.equal(cycleBase({}, { entity: W }, []), null);
+  const custom = cycleBase({ [W]: [{ s: "Ready", lu: T0 }, { s: "Go", lu: T0 + 60 }] }, { entity: W, running_states: ["go"] }, []);
+  assert.equal(custom.start, (T0 + 60) * 1000, "your own state lists count");
+});
+
+test("used: the difference, or the new value when the counter was reset", async () => {
+  const { used } = await boot();
+  assert.ok(Math.abs(used("12.9", 12.3) - 0.6) < 1e-9);
+  assert.equal(used("0.4", 12.3), 0.4);
+  assert.equal(used("unknown", 12.3), null);
+  assert.equal(used("12", undefined), null);
+});
+
+const consumptionHass = (state, phase = "rinse") => {
+  const hass = fakeHass(states(state, phase, "60", "30", {
+    "sensor.washer_energy": st("12.9", { unit_of_measurement: "kWh", device_class: "energy" }),
+    "sensor.washer_water": st("938", { unit_of_measurement: "L", device_class: "water" })
+  }));
+  hass.ws = [];
+  hass.callWS = async (msg) => { hass.ws.push(msg); return HISTORY; };
+  return hass;
+};
+const CONS = { ...BASE, consumption: ["sensor.washer_energy", { entity: "sensor.washer_water", decimals: 0 }] };
+
+test("consumption: one history request per cycle, then this cycle's use under the times", async () => {
+  const hass = consumptionHass("active");
+  const el = await makeCard(CONS, hass);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(hass.ws.length, 1);
+  assert.equal(hass.ws[0].type, "history/history_during_period");
+  assert.deepEqual(hass.ws[0].entity_ids, [W, "sensor.washer_energy", "sensor.washer_water"]);
+  assert.match($(el, ".times").textContent, /Used\s*0\.6\s*kWh\s*38\s*L/);
+  assert.deepEqual($$(el, ".use ha-icon").map((i) => i.getAttribute("icon")), ["mdi:lightning-bolt", "mdi:water"]);
+  // Pausing and finishing are the same cycle: no new request.
+  el.hass = { ...hass, states: { ...hass.states, [W]: st("pause") } };
+  el.hass = { ...hass, states: { ...hass.states, [W]: st("idle"), "sensor.washer_phase": st("finish") } };
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(hass.ws.length, 1);
+  assert.match($(el, ".times").textContent, /Used/, "still shown when it has finished");
+  // At rest it goes away; the next cycle asks again.
+  el.hass = { ...hass, states: { ...hass.states, [W]: st("idle"), "sensor.washer_phase": st("idle") } };
+  assert.equal($(el, ".times"), null);
+  el.hass = { ...hass, states: { ...hass.states, [W]: st("active") } };
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(hass.ws.length, 2);
+  // Straight from finished to a new cycle also asks again.
+  el.hass = { ...hass, states: { ...hass.states, [W]: st("idle"), "sensor.washer_phase": st("finish") } };
+  el.hass = { ...hass, states: { ...hass.states, [W]: st("active") } };
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(hass.ws.length, 3);
+});
+
+test("consumption: nothing is asked without counters, and a failed request just hides the row", async () => {
+  const quiet = consumptionHass("active");
+  await makeCard(BASE, quiet);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(quiet.ws.length, 0);
+  const broken = consumptionHass("active");
+  let asked = 0;
+  broken.callWS = async () => { asked++; throw new Error("no recorder"); };
+  const el = await makeCard(CONS, broken);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(asked, 1, "one try per cycle, never a loop");
+  assert.doesNotMatch($(el, ".times").textContent, /Used/);
+  assert.match($(el, ".times").textContent, /Remaining/);
+});
+
+test("consumption in Italian, with the user's decimal separator", async () => {
+  const hass = consumptionHass("active");
+  hass.language = "it";
+  hass.locale = { language: "it" };
+  const el = await makeCard(CONS, hass);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.match($(el, ".times").textContent, /Consumo\s*0,6\s*kWh/);
 });

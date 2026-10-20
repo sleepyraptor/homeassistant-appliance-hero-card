@@ -1,6 +1,6 @@
 {
   "name": "appliance-hero-card",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Home Assistant card: a washer, dryer or dishwasher at a glance — phase, progress ring, finish time, controls, options and alerts",
